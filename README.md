@@ -1,8 +1,17 @@
 # Standalone outbound proxy
 
-Use one local HTTP listener for applications on a Debian, Ubuntu or macOS host. Tinyproxy and stunnel connect to authenticated HTTPS upstreams. Fresh installs start with forwarding off. The operator can use the CLI or the browser page to change the same settings.
+Run one local web panel and an HTTP forwarding proxy backed by an authenticated HTTPS upstream. The Docker edition runs both processes in a single container. Choose the container edition for an independent installation on a Docker host. The native tools remain available for Debian, Ubuntu and macOS installations.
 
-## Install
+## Docker installation
+
+Use the deployment script from the same reviewed revision as the image, together with its Compose file. Supply the immutable image reference printed by the build. The Linux installer can explicitly enable a selected LAN subnet. Docker Desktop LAN acceptance is pending. The deployment script checks host-local management isolation before admitting the installation.
+
+Open [the local panel](http://127.0.0.1:18890/) on the Docker host. The container panel opens without a manual pairing code. Select a verified upstream and enable forwarding. The default client port is 18888. The panel stays up when forwarding is disabled. The deployment script controls host port publication and LAN access.
+
+- [Install, reconfigure, back up, roll back and remove the container](docs/container-install.md)
+- [Select a PR preview, integration build or stable release](docs/image-channels.md)
+
+## Native installation
 
 Use system Python 3.9 or later. On Debian or Ubuntu with systemd, install the executable dependencies.
 
