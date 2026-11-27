@@ -1,5 +1,5 @@
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
+FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
         ca-certificates curl python3 stunnel4 tini tinyproxy-bin \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 outbound \
