@@ -45,6 +45,12 @@ trusted_blob=$(producer_blob "$GITHUB_SHA")
 
 case "$GITHUB_EVENT_NAME:$(jq -r '.event' <<< "$run")" in
   workflow_run:pull_request)
+    # Protected branches still receive required checks on documentation-only PRs.
+    jobs=$(gh api --paginate --slurp "$repo/actions/runs/$run_id/attempts/$attempt/jobs?per_page=100")
+    if jq -e '[.[].jobs[] | select(.name == "verify") | .conclusion] == ["skipped"]' <<< "$jobs" > /dev/null; then
+      echo "Documentation-only PR. No image to publish." >> "$GITHUB_STEP_SUMMARY"
+      exit 0
+    fi
     pr=$(jq -er --arg rev "$rev" '.pull_requests | select(length == 1) | .[0]
       | select(.base.ref == "test" and .head.sha == $rev) | .number' <<< "$run")
     [[ $pr =~ ^[1-9][0-9]*$ ]]

@@ -46,6 +46,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/workflows/qualify-image.sh
       - name: Publish the verified index by digest
+        if: steps.qualified.outputs.digest != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.qualified.outputs.tag }}
