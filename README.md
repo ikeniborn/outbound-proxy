@@ -41,52 +41,37 @@ Tinyproxy supplies the upstream credentials. stunnel verifies the upstream certi
 
 Install Docker Engine 28+ and Compose 2.33.1+ on Linux, or start Docker Desktop with those versions on macOS or Windows. Select a local context running Linux containers. The defaults require free ports 18888 and 18890 and an unused subnet `172.29.240.0/28`. Have the DNS hostname, username and password of your HTTPS upstream ready.
 
-### Get the installer and image
+### Get the release installer
 
-Clone the repository and open its root directory. These commands work in Terminal and PowerShell.
+All three installers pull `ghcr.io/ikeniborn/outbound-proxy:stable` and record its immutable digest. The release workflow updates this tag when it publishes the GitHub release marked **Latest**.
 
-```bash
-git clone https://github.com/ikeniborn/outbound-proxy.git
-cd outbound-proxy
-```
+Open the [latest release](https://github.com/ikeniborn/outbound-proxy/releases/latest). Once its **Publish verified image** run has succeeded, download **Source code (zip)** from the release assets and extract it. Open a terminal in the extracted directory containing `compose.yaml`. If the package is private, sign in to GHCR in the Docker context used for installation.
 
-Choose one image source:
-
-- **Published image.** Copy the full `ghcr.io/ikeniborn/outbound-proxy@sha256:…` reference from the **Publish verified image** run summary. Check out the Git revision listed in the same summary. Private images require registry read access in the Docker context used by the installer.
-- **Local build.** Build from the checkout you intend to install. Copy the full `sha256:…` image ID printed by the second command. Both Desktop installers accept that ID.
-
-```bash
-docker build --tag outbound-proxy:local .
-docker image inspect --format '{{.Id}}' outbound-proxy:local
-```
+This quick start requires a published stable image. Before the first release, the release link returns 404 and the registry has no stable image to pull.
 
 ### Linux
 
-Install Python 3.9+, curl, iproute2 and nftables. Use Bash and the administrative Docker context. Paste the image reference or local image ID at the prompt.
+Install Python 3.9+, curl, iproute2 and nftables. Run the installer in the administrative Docker context.
 
 ```bash
-read -r -p 'Image reference or local image ID: ' IMAGE
-sudo sh scripts/docker-proxy.sh install --image "$IMAGE"
+sudo sh scripts/docker-proxy.sh install --image ghcr.io/ikeniborn/outbound-proxy:stable
 ```
 
 ### macOS
 
-Install Python 3.9+ and curl. Start Docker Desktop and wait for its engine to be ready. In Terminal, run the following as the signed-in Desktop user. Paste the image reference or local image ID when prompted. The commands work in the default zsh shell.
+Install Python 3.9+ and curl. Start Docker Desktop and wait for its engine to be ready. Run these commands in Terminal as the signed-in Desktop user.
 
 ```bash
-printf 'Image reference or local image ID: '
-read -r IMAGE
-sh scripts/docker-proxy.sh install --image "$IMAGE"
+sh scripts/docker-proxy.sh install --image ghcr.io/ikeniborn/outbound-proxy:stable
 sh scripts/docker-proxy.sh status
 ```
 
 ### Windows
 
-Start Docker Desktop in Linux container mode. Open Windows PowerShell 5.1 or newer in the repository root under the same Windows account. A fresh local-only installation uses a regular PowerShell session. Paste the image reference or local image ID when prompted.
+Start Docker Desktop in Linux container mode. Open Windows PowerShell 5.1 or newer in the extracted directory under the same Windows account. A fresh local-only installation uses a regular PowerShell session.
 
 ```powershell
-$Image = Read-Host 'Image reference or local image ID'
-.\scripts\docker-proxy.ps1 install -Image $Image
+.\scripts\docker-proxy.ps1 install -Image ghcr.io/ikeniborn/outbound-proxy:stable
 .\scripts\docker-proxy.ps1 status
 ```
 
