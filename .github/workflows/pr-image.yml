@@ -1,0 +1,87 @@
+name: Verify image
+on:
+  pull_request:
+    branches: [test, master]
+  push:
+    branches: [test, master]
+
+permissions:
+  contents: read
+
+env:
+  REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check promotion source
+        if: github.event_name == 'pull_request' && github.base_ref == 'master'
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: '[[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" && "$HEAD_REF" == test ]]'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.REVISION }}
+          persist-credentials: false
+      - name: Run service, browser and TLS tests
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVISION"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends tinyproxy-bin stunnel4
+          python3 -m venv "$RUNNER_TEMP/test-venv"
+          source "$RUNNER_TEMP/test-venv/bin/activate"
+          pip install pytest playwright
+          if ! command -v google-chrome; then python -m playwright install --with-deps chromium; fi
+          python -m pytest -q tests
+
+  windows:
+    name: Windows installer
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.REVISION }}
+          persist-credentials: false
+      - name: Run installer checks under Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\windows-deploy.ps1
+
+  verify:
+    needs: [tests, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.REVISION }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+        with:
+          platforms: arm64
+          cache-image: false
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          cache-binary: false
+      - name: Build both platforms and verify the OCI index
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/image.oci.tar"
+          docker buildx build --platform linux/amd64,linux/arm64 --provenance=false \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --output "type=oci,dest=$archive" .
+          digest=$(python3 -I .github/workflows/verify_oci.py "$archive" "$RUNNER_TEMP/layout" "$REVISION")
+          printf 'Tested revision **%s**\n\nOCI index **%s** (linux/amd64 and linux/arm64)\n' "$REVISION" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload immutable build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oci-${{ github.run_id }}-${{ github.run_attempt }}-${{ env.REVISION }}
+          path: ${{ runner.temp }}/image.oci.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
