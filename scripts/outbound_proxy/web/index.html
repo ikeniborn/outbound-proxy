@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Outbound Proxy</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><div class="wrap"><span class="mark" aria-hidden="true">↗</span><h1>Outbound Proxy</h1></div></header>
+  <main class="wrap">
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section id="login" class="card login">
+      <h2>Pair this browser</h2>
+      <p id="login-help">Enter the installation code, or run outbound-proxy ui pair in an operator terminal for a new code.</p>
+      <form id="login-form" autocomplete="off" method="post">
+        <label for="secret">Pairing code</label>
+        <input id="secret" type="password" autocomplete="off" required autofocus spellcheck="false">
+        <button type="submit" class="primary">Pair browser</button>
+      </form>
+      <noscript><p>Enable JavaScript to manage the proxy.</p></noscript>
+    </section>
+    <fieldset id="panel" aria-label="Proxy controls" hidden>
+      <section class="card">
+        <div class="section-head"><h2>Forwarding</h2><button id="refresh" type="button">Refresh status</button></div>
+        <div class="service-state"><span id="service-dot" aria-hidden="true"></span><strong id="running"></strong></div>
+        <dl class="summary">
+          <div><dt>Selected upstream</dt><dd id="selected"></dd></div>
+          <div><dt>Configured forwarding</dt><dd id="enabled"></dd></div>
+          <div><dt>Boot startup</dt><dd id="boot"></dd></div>
+          <div><dt>Last check</dt><dd id="check"></dd></div>
+        </dl>
+        <p id="pending" class="warning" hidden>Recovery pending. Check the service before changing settings.</p>
+        <div id="service-controls"><button type="button" id="enable" class="primary">Enable forwarding</button>
+          <button type="button" id="disable">Disable forwarding</button></div>
+      </section>
+      <section class="card">
+        <h2>Listener settings</h2>
+        <div class="settings">
+          <form id="port-form" method="post">
+            <label for="port">Loopback port</label>
+            <div class="port-input"><input type="number" id="port" min="1024" max="65535" required><button type="submit">Save port</button></div>
+          </form>
+          <div class="prefs">
+            <label><input type="checkbox" id="failover"> Automatic failover</label>
+            <label><input type="checkbox" id="docker"> Docker bridge access</label>
+            <small id="docker-unavailable" hidden>Docker bridge access is unavailable on this platform.</small>
+          </div>
+        </div>
+      </section>
+      <section class="card" id="bridge" hidden>
+        <div class="section-head"><h2>Docker bridge</h2><strong id="bridge-name"></strong></div>
+        <p id="bridge-status"></p>
+        <div id="bridge-details" hidden>
+          <dl class="summary">
+            <div><dt>Interface</dt><dd id="bridge-interface"></dd></div>
+            <div><dt>Link state</dt><dd id="bridge-link"></dd></div>
+            <div><dt>Subnet</dt><dd id="bridge-subnet"></dd></div>
+            <div><dt>Gateway</dt><dd id="bridge-gateway"></dd></div>
+          </dl>
+          <strong id="member-count"></strong>
+          <div id="member-table" class="table-scroll" hidden><table aria-label="Attached containers">
+            <thead><tr><th scope="col">Container</th><th scope="col">IPv4 address</th></tr></thead>
+            <tbody id="members"></tbody>
+          </table></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="section-head"><h2>Upstreams</h2><button type="button" id="add">Add upstream</button></div>
+        <p id="empty">No upstreams configured.</p>
+        <div class="table-scroll" id="catalog" hidden><table aria-label="Configured upstreams">
+          <thead><tr><th scope="col">Name</th><th scope="col">Endpoint</th><th scope="col">Actions</th></tr></thead>
+          <tbody id="upstreams"></tbody>
+        </table></div>
+      </section>
+    </fieldset>
+  </main>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <form id="editor-form" method="post" autocomplete="off">
+      <h2 id="editor-title">Add upstream</h2>
+      <label for="name">Upstream name</label><input id="name" required spellcheck="false" autocomplete="off">
+      <label for="uri">Authenticated HTTPS URI</label>
+      <input id="uri" type="password" spellcheck="false" autocomplete="off" aria-describedby="uri-help">
+      <small id="uri-help"></small>
+      <div class="dialog-actions"><button type="button" id="cancel">Cancel</button>
+        <button type="submit" class="primary">Save upstream</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

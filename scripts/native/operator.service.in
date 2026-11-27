@@ -1,0 +1,12 @@
+[Unit]
+Description=Outbound proxy @ACTION@
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@LAUNCHER@ @ACTION@
+@RETRY@
+
+[Install]
+WantedBy=multi-user.target

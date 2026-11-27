@@ -1,0 +1,16 @@
+[Unit]
+Description=MiniPC outbound HTTPS proxy TLS transport
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/bin/sh -ec 'config=/run/minipc-proxy/active/stunnel.conf; test -f "$$config" || config=/etc/minipc-proxy/verified/stunnel.conf; exec /usr/bin/stunnel "$$config"'
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
