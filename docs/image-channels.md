@@ -48,3 +48,13 @@ The publisher validates the repository, workflow ID, workflow file, event, PR as
 4. Check the publisher summary for the commit and exact install reference. Confirm that the public `stable` tag resolves to the verified OCI index digest without registry credentials.
 
 Use the artifact during its 30-day retention period. If it has expired, rerun **Verify image** for the same `master` push and review the new attempt and digest. A revision or release tag already assigned to different content causes publication to fail. Roll back an installation by selecting its previously recorded digest and matching scripts. Keep the referenced package version in GHCR while that rollback is needed.
+
+## Scan v0.1.0 with the reviewed MiniZip exception
+
+The [v0.1.0 OpenVEX statement](security/v0.1.0-minizip.openvex.json) covers CVE-2023-45853 in the Debian `zlib1g` package for the AMD64 and ARM64 images at the digest below. Debian omits the affected MiniZip code from this package. [Debian Security Tracker](https://security-tracker.debian.org/tracker/CVE-2023-45853)
+
+From the repository root, run Trivy for the platform you use. For ARM64, change `linux/amd64` to `linux/arm64`.
+
+```bash
+trivy image --platform linux/amd64 --vex docs/security/v0.1.0-minizip.openvex.json ghcr.io/ikeniborn/outbound-proxy@sha256:987aab84e76395c9c7456529a68b21885331bcc0d0afcf2a08aaf45f417c79fc
+```
