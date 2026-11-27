@@ -2,6 +2,8 @@
 
 Install from `ghcr.io/ikeniborn/outbound-proxy@sha256:<index-digest>`. Copy the full reference from the **Publish verified image** run summary. The digest identifies the same OCI index on Linux AMD64 and ARM64. Use installation scripts from the Git revision in that summary.
 
+PRs and pushes to `test` or `master` skip **Verify image** when every changed file is the root `README.md` or a Markdown file under `docs/`. Such revisions produce no image artifact. Use a promotion that passed image verification for a release. Mixed changes follow the build process below.
+
 | Source | Checks and delivery |
 |---|---|
 | PR into `test` | **Verify image** checks the exact PR head, runs the service suite and builds both architectures. The run lists the Git revision and OCI index digest. |
