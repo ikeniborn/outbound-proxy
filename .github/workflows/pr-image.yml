@@ -2,8 +2,14 @@ name: Verify image
 on:
   pull_request:
     branches: [test, master]
+    paths-ignore:
+      - README.md
+      - 'docs/**/*.md'
   push:
     branches: [test, master]
+    paths-ignore:
+      - README.md
+      - 'docs/**/*.md'
 
 permissions:
   contents: read
