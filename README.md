@@ -37,26 +37,76 @@ Tinyproxy supplies the upstream credentials. stunnel verifies the upstream certi
 - **LAN PCs.** Select the host's LAN IPv4 address and the permitted source subnet. For example, if the host is `192.0.2.10` and the permitted subnet is `192.0.2.0/26`, a PC in that subnet uses `http://192.0.2.10:18888` at the default forwarding port. Substitute your own LAN values. [LAN setup on Linux](docs/container-install.md#lan-forwarding-on-linux-engine)
 - **Docker containers.** With the repository installer, enable the client network, attach each intended container to `outbound-proxy-clients`, then enable Docker forwarding in the panel. Clients use `http://172.29.241.2:18888` even if the published host port changes. In the MiniPC deployment shown above, the bridge gateway is `192.168.70.1` and the proxy container's URL is `http://192.168.70.14:18888`. [Docker client setup](docs/container-install.md#docker-clients-and-inventory)
 
-## Docker quick start on Linux
+## Docker quick start
 
-You need an HTTPS upstream with a DNS hostname, username and password. On the host, use a local Docker Engine 28+ context with Linux containers, Compose 2.33.1+, Python 3.9+, curl, iproute2, nftables and administrative access. Ports 18888 and 18890 must be available and `172.29.240.0/28` must be free.
+Install Docker Engine 28+ and Compose 2.33.1+ on Linux, or start Docker Desktop with those versions on macOS or Windows. Select a local context running Linux containers. The defaults require free ports 18888 and 18890 and an unused subnet `172.29.240.0/28`. Have the DNS hostname, username and password of your HTTPS upstream ready.
 
-1. Open the **Publish verified image** run summary. Copy the full image reference ending in `@sha256:…`. Open Bash in the root of the repository at the Git revision from that summary. For private images, the administrative Docker context needs registry read access.
-2. Run the installer and paste the image reference at the prompt.
+### Get the installer and image
+
+Clone the repository and open its root directory. These commands work in Terminal and PowerShell.
 
 ```bash
-read -r -p 'Full image reference: ' IMAGE
+git clone https://github.com/ikeniborn/outbound-proxy.git
+cd outbound-proxy
+```
+
+Choose one image source:
+
+- **Published image.** Copy the full `ghcr.io/ikeniborn/outbound-proxy@sha256:…` reference from the **Publish verified image** run summary. Check out the Git revision listed in the same summary. Private images require registry read access in the Docker context used by the installer.
+- **Local build.** Build from the checkout you intend to install. Copy the full `sha256:…` image ID printed by the second command. Both Desktop installers accept that ID.
+
+```bash
+docker build --tag outbound-proxy:local .
+docker image inspect --format '{{.Id}}' outbound-proxy:local
+```
+
+### Linux
+
+Install Python 3.9+, curl, iproute2 and nftables. Use Bash and the administrative Docker context. Paste the image reference or local image ID at the prompt.
+
+```bash
+read -r -p 'Image reference or local image ID: ' IMAGE
 sudo sh scripts/docker-proxy.sh install --image "$IMAGE"
 ```
 
-3. Open the [local management panel](http://127.0.0.1:18890/) on the Docker host. Add the upstream, run its check, select it and enable forwarding. The container edition opens the panel without a pairing code.
-4. From the same host, request a page through the forwarding port. A successful request prints the example page. Use the same proxy URL in your application's HTTP proxy settings.
+### macOS
+
+Install Python 3.9+ and curl. Start Docker Desktop and wait for its engine to be ready. In Terminal, run the following as the signed-in Desktop user. Paste the image reference or local image ID when prompted. The commands work in the default zsh shell.
+
+```bash
+printf 'Image reference or local image ID: '
+read -r IMAGE
+sh scripts/docker-proxy.sh install --image "$IMAGE"
+sh scripts/docker-proxy.sh status
+```
+
+### Windows
+
+Start Docker Desktop in Linux container mode. Open Windows PowerShell 5.1 or newer in the repository root under the same Windows account. A fresh local-only installation uses a regular PowerShell session. Paste the image reference or local image ID when prompted.
+
+```powershell
+$Image = Read-Host 'Image reference or local image ID'
+.\scripts\docker-proxy.ps1 install -Image $Image
+.\scripts\docker-proxy.ps1 status
+```
+
+### Enable forwarding and verify the connection
+
+On the Docker host, open the [local management panel](http://127.0.0.1:18890/). Add your HTTPS upstream, run its check, select it and enable forwarding. The container edition opens the panel without a pairing code.
+
+On Linux or macOS, run:
 
 ```bash
 curl --fail --show-error --noproxy '' --proxy http://127.0.0.1:18888 https://example.com/
 ```
 
-The panel stays available when forwarding is disabled. For Windows or macOS Docker Desktop, or for LAN access, follow the platform instructions. LAN forwarding has been exercised with a second machine on Linux Engine. Physical Desktop acceptance on Windows and macOS is pending.
+In Windows PowerShell, run:
+
+```powershell
+curl.exe --fail --show-error --noproxy unused.invalid --proxy http://127.0.0.1:18888 https://example.com/
+```
+
+A successful request prints the example page. Set your application's HTTP proxy to `http://127.0.0.1:18888`. The panel stays available when forwarding is disabled. For access from another PC, follow the platform-specific LAN instructions. LAN forwarding has been exercised with a second machine on Linux Engine. Physical Desktop acceptance on Windows and macOS is pending.
 
 - [Container installation, LAN and Docker client access, backup and rollback](docs/container-install.md)
 - [Image channels and release selection](docs/image-channels.md)
