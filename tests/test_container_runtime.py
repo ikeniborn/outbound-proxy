@@ -173,6 +173,14 @@ def test_real_pipeline_restart_selection_and_private_children(tls_directory, mon
             runtime.close()
 
 
+def test_operator_selected_inventory_network():
+    from outbound_proxy.container_inventory import inventory_network
+    assert inventory_network({}) == "outbound-proxy-clients"
+    assert inventory_network({"OP_INVENTORY_NETWORK": "minipc-outbound-proxy"}) == "minipc-outbound-proxy"
+    with pytest.raises(ValueError):
+        inventory_network({"OP_INVENTORY_NETWORK": "../containers/json"})
+
+
 def test_inventory_only_requests_fixed_network_and_projects_response(monkeypatch):
     from outbound_proxy import container_inventory as inventory
     calls = []

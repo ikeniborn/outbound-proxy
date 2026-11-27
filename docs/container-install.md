@@ -123,7 +123,7 @@ sudo sh scripts/docker-proxy.sh reconfigure --clients --inventory
 sudo sh scripts/docker-proxy.sh reconfigure --no-inventory --no-clients
 ```
 
-With inventory enabled, the bootstrap process starts a separate unprivileged inventory helper with access to the Unix daemon socket and drops the panel's privileges. The helper projects member information from the fixed network inspection. By default the socket is absent. A read-only mount of a daemon socket still confers privileged API access on processes that can open it.
+With inventory enabled, the bootstrap process starts a separate unprivileged inventory helper with access to the Unix daemon socket and drops the panel's privileges. The helper projects member information from the fixed network inspection. A site Compose file may select an existing internal bridge with OP_INVENTORY_NETWORK. The helper accepts this name at process startup. By default the socket is absent. A read-only mount of a daemon socket still confers privileged API access on processes that can open it.
 
 Docker selects one IPv4 endpoint for published ports. The host ingress bridge therefore carries both the local panel and host forwarding listeners at 172.29.240.2. This updates the draft interface layout. The installer requires the proxy to be the sole member. Docker clients use a distinct proxy-only interface and cannot join ingress through the panel. Test the actual host gateway path on each supported Desktop backend. Docker users who control the daemon are trusted host operators. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/) · [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/)
 

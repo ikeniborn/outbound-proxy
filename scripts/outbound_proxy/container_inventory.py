@@ -4,13 +4,21 @@ import http.client
 import ipaddress
 import json
 import os
+import re
 import socket
 import stat
 import subprocess
 import sys
 import threading
 
-NETWORK = "outbound-proxy-clients"
+def inventory_network(env):
+    name = env.get("OP_INVENTORY_NETWORK", "outbound-proxy-clients")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", name):
+        raise ValueError("Invalid inventory network name")
+    return name
+
+
+NETWORK = inventory_network(os.environ)
 DAEMON = "/var/run/docker.sock"
 PANEL_UID = 10001
 HELPER_UID = 10002
