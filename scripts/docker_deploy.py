@@ -18,6 +18,7 @@ from urllib.request import ProxyHandler, build_opener
 import uuid
 
 import docker_lan as linux_lan
+import docker_pf
 from docker_lan import Error, run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,8 @@ def locked(directory):
 
 
 def local_engine():
+    if platform.system() == "Darwin" and os.geteuid() == 0:
+        raise Error("Run as the signed-in Docker Desktop user. The installer elevates only pfctl.")
     context = run("docker", "context", "show")
     endpoint = json.loads(run("docker", "context", "inspect", context))[0]["Endpoints"]["docker"]["Host"]
     if os.getenv("DOCKER_HOST") and not os.getenv("DOCKER_CONTEXT"):
@@ -127,9 +130,13 @@ def lan_interface(address, subnet):
     return linux_lan.lan_interface(address, subnet, run)
 
 
-def install_policy(config, owner, linux):
+def install_policy(config, owner, linux, *known):
     if linux:
         linux_lan.apply_policy(config, owner, run)
+    elif platform.system() == "Darwin":
+        if not config:
+            docker_pf.persist(None, owner, known, run)
+        docker_pf.apply(config, owner, known, run)
     elif config and config["lan"]:
         raise Error("LAN publication requires a local Linux Engine and its nftables ingress path.")
 
@@ -154,6 +161,8 @@ def save_text(path, content, mode):
 
 
 def boot_policy(config, owner, state, linux):
+    if not linux and platform.system() == "Darwin":
+        docker_pf.persist(config, owner, (), run)
     if not linux:
         return
     helper = state.parent / "restore-lan.py"
@@ -322,7 +331,60 @@ def await_panel(port, expected):
     raise Error("The published loopback endpoint failed its local HTTP check.")
 
 
-def verify(config, owner, linux):
+def read_status(cid):
+    try:
+        raw = run("docker", "exec", cid, "outbound-proxy", "status")
+        view = json.loads(raw)
+        if not isinstance(view, dict) or any(type(view.get(key)) is not bool for key in
+                                            ("enabled", "running", "failover", "recovery_pending")):
+            raise ValueError()
+        if re.search(r'"(?:uri|password|username|authorization|credential|secret|token)"\s*:|://[^"/\s]*@',
+                     raw, re.I):
+            raise ValueError()
+        names = set()
+        if not isinstance(view["upstreams"], list):
+            raise ValueError()
+        for item in view["upstreams"]:
+            if (set(item) != {"name", "host", "port"} or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", item["name"])
+                    or item["name"] in names or not re.fullmatch(r"[A-Za-z0-9.-]+", item["host"])
+                    or type(item["port"]) is not int or not 1 <= item["port"] <= 65535):
+                raise ValueError()
+            names.add(item["name"])
+        if (view["selected"] is not None and view["selected"] not in names) or (view["enabled"] and not view["selected"]):
+            raise ValueError()
+        return view
+    except (RuntimeError, KeyError, TypeError, ValueError):
+        raise Error("Installed CLI did not return a valid credential-free status.") from None
+
+
+def previous_status(config, owner):
+    if config:
+        cid = compose(config, owner, "ps", "-q", "proxy")
+        if cid:
+            try:
+                return read_status(cid)
+            except Error:
+                # Explicit recovery must also work when the previous supervisor is broken.
+                pass
+    return None
+
+
+def verify_cli(cid, config, expected):
+    view = read_status(cid)
+    if view["recovery_pending"] or view["enabled"] != view["running"]:
+        raise Error("The installed supervisor reports pending recovery or inconsistent forwarding state.")
+    if expected and (any(expected[key] != view[key] for key in ("enabled", "upstreams", "failover"))
+                     or (not expected["failover"] and expected["selected"] != view["selected"])):
+        raise Error("The replacement changed the committed route or catalog.")
+    if view["enabled"]:
+        proof = run("curl", "-q", "--silent", "--max-time", "15", "--noproxy", "", "--proxy",
+                    f"http://127.0.0.1:{config['port']}", "--output", os.devnull, "--write-out",
+                    "%{http_connect} %{http_code}", "https://example.com/")
+        if proof != "200 200":
+            raise Error("The published host port failed the fresh HTTPS forwarding probe.")
+
+
+def verify(config, owner, linux, expected=None):
     cid = compose(config, owner, "ps", "-q", "proxy")
     if not cid or len(cid.splitlines()) != 1:
         raise Error("Expected one running proxy container.")
@@ -333,6 +395,7 @@ def verify(config, owner, linux):
     if set(members) != {cid}:
         raise Error("The host ingress network must contain only the proxy service.")
     await_panel(18890, b"outbound proxy")
+    verify_cli(cid, config, expected)
     targets = [INGRESS, "engine-gateway"]
     if not linux:
         targets.append("host.docker.internal")
@@ -352,6 +415,27 @@ def available_port(address, port):
             listener.listen(1)
         except OSError as exc:
             raise Error(f"Cannot bind {address}:{port}: {exc}") from exc
+
+
+def validate_mapping(config, current, linux, *, saved=False):
+    if config["lan"]:
+        if linux:
+            interface = lan_interface(config["lan"], config["subnet"])
+            if Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() != "1":
+                raise Error("IPv4 forwarding is disabled on this Docker host.")
+        elif platform.system() == "Darwin":
+            interface = docker_pf.lan_interface(config["lan"], config["subnet"], run)
+            docker_pf.check_hook(run, interface)
+        else:
+            raise Error("LAN publication is unavailable on Docker Desktop on this host.")
+        if saved and interface != config["interface"]:
+            raise Error("The saved LAN address moved to a different interface.")
+        config["interface"] = interface
+        available_port(config["lan"], config["port"])
+    if not current:
+        available_port("127.0.0.1", 18890)
+    if not current or current["port"] != config["port"]:
+        available_port("127.0.0.1", config["port"])
 
 
 def configure(args, current, linux):
@@ -375,17 +459,7 @@ def configure(args, current, linux):
         if not args.lan or not args.subnet:
             raise Error("Supply both --lan and --subnet, or select --local-only.")
         config.update(lan=args.lan, subnet=args.subnet)
-    if config["lan"]:
-        if not linux:
-            raise Error("LAN publication is unavailable on Docker Desktop.")
-        config["interface"] = lan_interface(config["lan"], config["subnet"])
-        if Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() != "1":
-            raise Error("IPv4 forwarding is disabled on this Docker host.")
-        available_port(config["lan"], config["port"])
-    if not current:
-        available_port("127.0.0.1", 18890)
-    if not current or current["port"] != config["port"]:
-        available_port("127.0.0.1", config["port"])
+    validate_mapping(config, current, linux)
     if args.image:
         config["image"] = resolve_image(args.image)
     if not config.get("image"):
@@ -393,16 +467,17 @@ def configure(args, current, linux):
     return config
 
 
-def restore(previous, candidate, owner, linux):
-    install_policy(None, owner, linux)
+def restore(previous, candidate, owner, linux, expected=None):
+    install_policy(None, owner, linux, previous, candidate)
     if previous:
         if previous["clients"]:
             prepare_clients()
         compose(previous, owner, "up", "-d", "--pull", "never")
         try:
-            verify(previous, owner, linux)
+            verify(previous, owner, linux, expected)
+            validate_mapping(previous, previous, linux, saved=True)
             install_policy(previous, owner, linux)
-        except (OSError, RuntimeError, KeyboardInterrupt):
+        except (OSError, RuntimeError, ValueError, KeyboardInterrupt):
             compose(previous, owner, "down")
             raise
     elif candidate:
@@ -420,29 +495,37 @@ def deploy(args, path):
         if labels.get(OWNER) != owner:
             raise Error("This Compose project is owned by another deployment state directory.")
     if args.action == "status":
-        print(json.dumps({"settings": active, "recovery_required": "pending" in record,
-                          "container": compose(active, owner, "ps") if active else None}, indent=2))
+        info = {"settings": active, "recovery_required": "pending" in record,
+                "container": compose(active, owner, "ps") if active else None}
+        if platform.system() == "Darwin" and path.exists():
+            info["pf_anchor"] = docker_pf.anchor(owner)
+        print(json.dumps(info, indent=2))
         return
     verify_resources(owner)
+    if args.action == "remove":
+        pending = record.get("pending")
+        target = pending or active
+        if target:
+            atomic_json(path, dict(record, pending=target))
+            install_policy(None, owner, linux, active, pending)
+            boot_policy(None, owner, path, linux)
+            compose(target, owner, "down")
+        record.pop("pending", None)
+        record.update(active=None, previous=None)
+        if path.exists():
+            atomic_json(path, record)
+        print("Removed. The catalog volume is retained.")
+        return
     if "pending" in record:
         restore(active, record["pending"], owner, linux)
         boot_policy(active, owner, path, linux)
         del record["pending"]
         atomic_json(path, record)
-    if args.action == "remove":
-        if active:
-            atomic_json(path, dict(record, pending=None))
-            install_policy(None, owner, linux)
-            boot_policy(None, owner, path, linux)
-            compose(active, owner, "down")
-            record.update(active=None, previous=None)
-            atomic_json(path, record)
-        print("Removed. The catalog volume is retained.")
-        return
     if args.action == "rollback":
         candidate = record["previous"]
         if not candidate:
             raise Error("No previous deployment settings are recorded.")
+        validate_mapping(candidate, active, linux, saved=True)
     else:
         if args.action == "reconfigure" and not active:
             raise Error("Install the service before reconfiguration.")
@@ -453,17 +536,21 @@ def deploy(args, path):
         prepare_clients()
     compose(candidate, owner, "config", "--quiet")
     preflight_loopback(candidate, linux)
+    expected = previous_status(active, owner)
     atomic_json(path, dict(record, pending=candidate))
     try:
-        install_policy(None, owner, linux)
+        install_policy(None, owner, linux, active, candidate)
         compose(candidate, owner, "up", "-d", "--pull", "never")
-        verify(candidate, owner, linux)
-        boot_policy(candidate, owner, path, linux)
+        verify(candidate, owner, linux, expected)
+        if linux:
+            boot_policy(candidate, owner, path, linux)
         install_policy(candidate, owner, linux)
         committed = dict(record, active=candidate, previous=active if candidate != active else record["previous"])
         atomic_json(path, committed)
-    except (OSError, RuntimeError, KeyboardInterrupt):
-        restore(active, candidate, owner, linux)
+        if not linux:
+            boot_policy(candidate, owner, path, linux)
+    except (OSError, RuntimeError, ValueError, KeyboardInterrupt):
+        restore(active, candidate, owner, linux, expected)
         boot_policy(active, owner, path, linux)
         atomic_json(path, record)
         raise

@@ -29,6 +29,12 @@ def args(action="install", **changes):
 
 
 class DeploymentTests(unittest.TestCase):
+    def setUp(self):
+        # Pin the Engine and unsupported Desktop fixtures regardless of the test runner.
+        host = patch.object(deploy.platform, "system", return_value="Linux")
+        host.start()
+        self.addCleanup(host.stop)
+
     def test_base_bindings_and_client_inventory_override(self):
         base = (ROOT / "compose.yaml").read_text()
         self.assertIn('127.0.0.1:18890:18890', base)
@@ -159,7 +165,7 @@ class DeploymentTests(unittest.TestCase):
             path.write_text(json.dumps({"owner": "one", "active": LAN, "previous": None}))
             candidate = dict(LAN, port=19999)
             for name, value in (("local_engine", True), ("run", ""), ("configure", candidate),
-                                ("preflight_loopback", None), ("check_routes", None), ("boot_policy", None)):
+                                ("preflight_loopback", None), ("check_routes", None), ("boot_policy", None), ("validate_mapping", None)):
                 stack.enter_context(patch.object(deploy, name, return_value=value))
             compose = stack.enter_context(patch.object(deploy, "compose"))
             verify = stack.enter_context(patch.object(deploy, "verify", side_effect=[deploy.Error("health failed"), None]))
@@ -188,6 +194,65 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), initial)
             self.assertEqual(compose.call_args.args[-2:], ("config", "--quiet"))
             policy.assert_not_called()
+
+    def test_successful_html_does_not_hide_dead_cli(self):
+        with patch.object(deploy, "compose", return_value="cid"), \
+             patch.object(deploy, "run", side_effect=["id", "id", '[{"Containers":{"cid":{}}}]',
+                                                     deploy.Error("private error")]), \
+             patch.object(deploy, "await_panel") as page, patch.object(deploy, "probe_denial") as probe:
+            with self.assertRaisesRegex(deploy.Error, "valid credential-free") as result:
+                deploy.verify(LOCAL, "one", True)
+            page.assert_called_once_with(18890, b"outbound proxy")
+            self.assertNotIn("private error", str(result.exception))
+            probe.assert_not_called()
+
+    def test_cli_guards_and_enabled_path_must_pass_a_fresh_https_proxy_probe(self):
+        status = dict(enabled=True, running=True, failover=False, recovery_pending=False, selected="one",
+                      upstreams=[dict(name="one", host="proxy.example", port=443)])
+        for invalid in (dict(status, recovery_pending=True), dict(status, running=False),
+                        dict(status, uri="https://bad.example/")):
+            with patch.object(deploy, "run", return_value=json.dumps(invalid)):
+                with self.assertRaises(deploy.Error):
+                    deploy.verify_cli("id", LOCAL, None)
+        with patch.object(deploy, "run", side_effect=[json.dumps(status), "200 200"]) as run:
+            deploy.verify_cli("id", LOCAL, status)
+            self.assertIn("http://127.0.0.1:18888", run.call_args.args)
+            self.assertIn("https://example.com/", run.call_args.args)
+        with patch.object(deploy, "run", side_effect=[json.dumps(status), "200 503"]):
+            with self.assertRaisesRegex(deploy.Error, "HTTPS"):
+                deploy.verify_cli("id", LOCAL, status)
+        with patch.object(deploy, "run", return_value=json.dumps(status)):
+            with self.assertRaisesRegex(deploy.Error, "changed"):
+                deploy.verify_cli("id", LOCAL, dict(status, selected="old"))
+
+    def test_pending_remove_never_restores_a_service_or_opens_lan(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "local_engine", return_value=True), \
+             patch.object(deploy, "run", return_value=""), patch.object(deploy, "boot_policy") as boot, \
+             patch.object(deploy, "install_policy") as policy, patch.object(deploy, "compose") as compose:
+            for active in (None, LAN):
+                path = Path(directory) / "deployment.json"
+                path.write_text(json.dumps({"owner": "one", "active": active, "pending": LOCAL, "previous": None}))
+                deploy.deploy(args("remove"), path)
+                self.assertNotIn("pending", json.loads(path.read_text()))
+            self.assertTrue(all(c.args[2:] == ("down",) for c in compose.call_args_list))
+            self.assertTrue(all(c.args[0] is None for c in policy.call_args_list + boot.call_args_list))
+
+    def test_rollback_rejects_stale_lan_before_touching_the_active_deployment(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "local_engine", return_value=True), \
+             patch.object(deploy, "run", return_value=""), patch.object(deploy, "lan_interface", return_value="eth7"), \
+             patch.object(deploy, "compose") as compose, patch.object(deploy, "install_policy") as policy:
+            path = Path(directory) / "deployment.json"
+            path.write_text(json.dumps({"owner": "one", "active": LOCAL, "previous": LAN}))
+            read_text = Path.read_text
+            with patch.object(Path, "read_text", autospec=True,
+                              side_effect=lambda p: "1" if p.name == "ip_forward" else read_text(p)):
+                with self.assertRaisesRegex(deploy.Error, "different interface"):
+                    deploy.deploy(args("rollback"), path)
+            compose.assert_not_called()
+            policy.assert_not_called()
+            with patch.object(deploy, "available_port", side_effect=deploy.Error("port occupied")):
+                with self.assertRaisesRegex(deploy.Error, "port occupied"):
+                    deploy.validate_mapping(dict(LOCAL, port=19999), LOCAL, True, saved=True)
 
     def test_remove_retains_volume_and_can_run_twice(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "local_engine", return_value=False), \

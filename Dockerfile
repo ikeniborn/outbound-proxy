@@ -1,6 +1,6 @@
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl python3 stunnel4 tini tinyproxy \
+        ca-certificates curl python3 stunnel4 tini tinyproxy-bin \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 outbound \
     && useradd --uid 10001 --gid outbound --no-create-home outbound \

@@ -94,12 +94,103 @@ try {
         Expect-Failure { Assert-Ownership 'ours' } 'Conflicting volume'
     }
 
+
+    & {
+        $config = [pscustomobject]@{image=$localId; port=18888; lan='192.0.2.10'; subnet='192.0.2.64/26'}
+        $script:testState = @{enabled=$false; running=$false; boot_enabled=$false; recovery_pending=$false;
+            deployment=@{image=$localId}}
+        $script:forwardChecks = 0
+        function Invoke-Docker($Arguments) { return (ConvertTo-Json $script:testState -Depth 4) }
+        function Test-Forwarding($Config) { $script:forwardChecks++ }
+        Test-Operator $config 'container' 1
+        Assert ($script:forwardChecks -eq 0) 'Stopped service generated forwarding traffic'
+        $script:testState.enabled=$true; $script:testState.boot_enabled=$true
+        Expect-Failure { Test-Operator $config 'container' 1 } 'inconsistent'
+        $script:testState.running=$true
+        Test-Operator $config 'container' 1
+        Assert ($script:forwardChecks -eq 1) 'Enabled service skipped the fresh HTTPS check'
+        $script:testState.recovery_pending=$true
+        Expect-Failure { Test-Operator $config 'container' 1 } 'pending recovery'
+        $script:testState.Remove('running')
+        Expect-Failure { Test-Operator $config 'container' 1 } 'incomplete runtime status'
+    }
+
+    & {
+        $config = [pscustomobject]@{port=18888; lan='192.0.2.10'; subnet='192.0.2.64/26'}
+        function Get-NetIPAddress { [pscustomobject]@{AddressState='Preferred'; InterfaceIndex=5; PrefixLength=24} }
+        function Get-NetAdapter { [pscustomobject]@{Name='Ethernet'; Status='Up'; HardwareInterface=$true} }
+        $scope = Get-LanScope $config
+        Assert (($scope.block -join ',') -eq '0.0.0.0-192.0.2.63,192.0.2.128-255.255.255.255') 'IPv4 complement is incomplete'
+        Assert ((Get-RangeKeys '192.0.2.64/255.255.255.192') -eq (Get-RangeKeys '192.0.2.64/26')) 'Mask normalization differs'
+        $config.subnet='192.0.2.1/24'
+        Expect-Failure { Get-LanScope $config } 'network address'
+        $config.subnet='192.0.0.0/16'
+        Expect-Failure { Get-LanScope $config } 'fit within'
+        $config.subnet='192.0.2.64/26'
+        $script:rules = @{}
+        $script:profileEnabled = 'True'
+        $script:wrongScope = $false
+        $script:enforcement = 'Full'
+        function Get-CimInstance { foreach ($name in @('BFE','MpsSvc')) { [pscustomobject]@{Name=$name; State='Running'; StartMode='Auto'} } }
+        function Get-NetFirewallProfile {
+            foreach ($name in @('Domain','Private','Public')) {
+                [pscustomobject]@{Name=$name; Enabled=$script:profileEnabled; AllowLocalFirewallRules='True'; DisabledInterfaceAliases=@()}
+            }
+        }
+        function Get-NetFirewallSecurityFilter { return }
+        function New-NetFirewallRule($Name,$Group,$Enabled,$Direction,$Profile,$Action,$RemoteAddress,$InterfaceAlias,$LocalAddress,$LocalPort,$Protocol,$PolicyStore) {
+            Assert ($PolicyStore -eq 'PersistentStore') 'Rules must persist across Windows restarts'
+            $script:rules[$Name]=[pscustomobject]@{Name=$Name; Group=$Group; Enabled=$Enabled; Direction=$Direction; Profile=$Profile; Action=$Action;
+                PolicyStoreSourceType='Local'; PrimaryStatus='OK'; EnforcementStatus='Full'; LocalAddress=$LocalAddress; RemoteAddress=$RemoteAddress;
+                LocalPort=$LocalPort; Protocol=$Protocol; InterfaceAlias=$(if ($InterfaceAlias) {$InterfaceAlias} else {'Any'})}
+        }
+        function Get-NetFirewallRule($Name,$PolicyStore) {
+            if ($PolicyStore -eq 'PersistentStore') { return $script:rules.Values }
+            $rule = $script:rules[$Name]
+            $rule.EnforcementStatus=$script:enforcement
+            return $rule
+        }
+        function Get-NetFirewallAddressFilter { process {
+            [pscustomobject]@{LocalAddress=$_.LocalAddress; RemoteAddress=$(if ($script:wrongScope) {'0.0.0.0/0'} else {$_.RemoteAddress})}
+        } }
+        function Get-NetFirewallPortFilter { process { [pscustomobject]@{LocalPort=$_.LocalPort; RemotePort='Any'; Protocol=$_.Protocol} } }
+        function Get-NetFirewallApplicationFilter { process { [pscustomobject]@{Program='Any'} } }
+        function Get-NetFirewallServiceFilter { process { [pscustomobject]@{Service='Any'} } }
+        function Get-NetFirewallInterfaceFilter { process { [pscustomobject]@{InterfaceAlias=$_.InterfaceAlias} } }
+        function Remove-NetFirewallRule { process { $script:rules.Remove($_.Name) } }
+        Install-LanPolicy $config 'test'
+        Assert ($script:rules.Count -eq 2) 'Expected two narrow persistent rules'
+        Assert ($script:rules['outbound-proxy-test-allow'].InterfaceAlias -eq 'Ethernet') 'Allow rule bound wrong adapter'
+        $script:profileEnabled='False'
+        Expect-Failure { Assert-LanPolicy $config 'test' } 'cannot enforce'
+        $script:profileEnabled='True'; $script:wrongScope=$true
+        Expect-Failure { Assert-LanPolicy $config 'test' } 'scope differs'
+        $script:wrongScope=$false; $script:enforcement='LocalFirewallRulesDisallowed'
+        Expect-Failure { Assert-LanPolicy $config 'test' } 'does not enforce'
+        $script:rules['outbound-proxy-test-allow'].Group='foreign'
+        Expect-Failure { Remove-LanPolicy 'test' } 'ownership conflict'
+        Assert ($script:rules.Count -eq 2) 'Conflicting rule caused partial cleanup'
+        $script:rules['outbound-proxy-test-allow'].Group='outbound-proxy-test'
+        Remove-LanPolicy 'test'
+        Assert ($script:rules.Count -eq 0) 'Owned rules survived removal'
+    }
+
     & {
         $StateDir = $tempRoot
         $state = Join-Path $StateDir 'deployment.json'
         $script:events = @()
         $script:badIsolation = $false
         $script:badPort = 0
+        $script:rejectLanCanary = $false
+        function Assert-LanAdministrator {}
+        function Get-LanScope($Config) { return @{} }
+        function Assert-FirewallProfiles($Config,$Scope) {}
+        function Remove-LanPolicy($Owner) { $script:events += 'firewall:remove' }
+        function Install-LanPolicy($Config,$Owner) { $script:events += 'firewall:install' }
+        function Test-LanListener($Config) {
+            $script:events += 'lan:canary'
+            if ($script:rejectLanCanary) { throw 'unverified LAN backend' }
+        }
         function Assert-Desktop {}
         function Assert-Ownership($Owner) { Assert (![string]::IsNullOrEmpty($Owner)) 'Missing owner' }
         function Assert-FreePort($Number) { if ($Number -eq 19997) { throw 'occupied' } }
@@ -143,13 +234,22 @@ try {
         $Action='reconfigure'
         $null = Invoke-Deployment
         Assert (!(ConvertFrom-Json ([IO.File]::ReadAllText($state))).pending) 'Interrupted update not recovered'
-        $Action='remove'
+        $Lan='192.0.2.10'; $Subnet='192.0.2.64/26'; $Action='reconfigure'; $script:rejectLanCanary=$true
+        Expect-Failure { Invoke-Deployment } 'unverified LAN backend'
+        Assert (!(ConvertFrom-Json ([IO.File]::ReadAllText($state))).active.lan) 'Failed canary committed LAN settings'
+        $script:rejectLanCanary=$false
+        $start=$script:events.Count
         $null = Invoke-Deployment
+        $changes = $script:events[$start..($script:events.Count-1)] -join ','
+        Assert ($changes -eq 'config:18888,down:18888,firewall:remove,firewall:install,lan:canary,up:18888') 'Catalog started before the firewall and LAN canary'
+        $Action='remove'; $Lan=$null; $Subnet=$null
+        $null = Invoke-Deployment
+        Assert ($script:events[-2] -eq 'down:18888' -and $script:events[-1] -eq 'firewall:remove') 'Firewall removed while port was still published'
         $last = $script:events.Count
         $null = Invoke-Deployment
         Assert ($script:events.Count -eq $last) 'Repeated removal changed Docker state'
         $Lan='192.0.2.1'; $Action='install'
-        Expect-Failure { Invoke-Deployment } 'LAN publication is unavailable'
+        Expect-Failure { Invoke-Deployment } 'Specify both -Lan and -Subnet'
     }
     'Windows deployment checks passed.'
 } finally { [IO.Directory]::Delete($tempRoot,$true) }

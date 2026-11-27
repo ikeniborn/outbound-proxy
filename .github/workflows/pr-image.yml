@@ -77,6 +77,16 @@ jobs:
             --output "type=oci,dest=$archive" .
           digest=$(python3 -I .github/workflows/verify_oci.py "$archive" "$RUNNER_TEMP/layout" "$REVISION")
           printf 'Tested revision **%s**\n\nOCI index **%s** (linux/amd64 and linux/arm64)\n' "$REVISION" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Smoke test the verified AMD64 image through the POSIX installer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nftables skopeo
+          python3 -m venv "$RUNNER_TEMP/smoke-venv"
+          source "$RUNNER_TEMP/smoke-venv/bin/activate"
+          pip install playwright
+          if ! command -v google-chrome && ! command -v chromium; then python -m playwright install --with-deps chromium; fi
+          python -I .github/workflows/smoke-oci.py "$RUNNER_TEMP/layout"
       - name: Upload immutable build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -4,7 +4,7 @@ Run one local web panel and an HTTP forwarding proxy backed by an authenticated 
 
 ## Docker installation
 
-Use the deployment script from the same reviewed revision as the image, together with its Compose file. Supply the immutable image reference printed by the build. The Linux installer can explicitly enable a selected LAN subnet. Docker Desktop LAN acceptance is pending. The deployment script checks host-local management isolation before admitting the installation.
+Use the deployment script from the same reviewed revision as the image, together with its Compose file. Supply the immutable image reference printed by the build. The installer can publish the forwarding port to a selected LAN using a host address and permitted IPv4 subnet. Linux Engine has been exercised with a second machine. Physical Windows and macOS Desktop acceptance is pending. The deployment script checks host-local management isolation before admitting the installation.
 
 Open [the local panel](http://127.0.0.1:18890/) on the Docker host. The container panel opens without a manual pairing code. Select a verified upstream and enable forwarding. The default client port is 18888. The panel stays up when forwarding is disabled. The deployment script controls host port publication and LAN access.
 
