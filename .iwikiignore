@@ -1,0 +1,24 @@
+# .iwikiignore -- source paths that must NOT be ingested into the wiki.
+# gitignore syntax. Created once when missing or empty; edit manually afterward.
+
+# --- secrets ---
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*secret*
+*credentials*
+
+# --- common project noise ---
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.DS_Store

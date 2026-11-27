@@ -1,0 +1,3 @@
+read = ["outbound-proxy"]
+write = ["outbound-proxy"]
+primary = "outbound-proxy"
