@@ -1,0 +1,11 @@
+table inet minipc_proxy
+delete table inet minipc_proxy
+table inet minipc_proxy {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        tcp dport 18888 iifname "lo" ip daddr 127.0.0.1 return
+        tcp dport 18888 iifname "br-minipc-proxy" ip saddr 192.168.70.0/28 ip daddr 192.168.70.1 return
+        tcp dport 18888 drop
+        tcp dport 18889 iifname != "lo" drop
+    }
+}

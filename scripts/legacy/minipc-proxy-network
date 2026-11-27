@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+network=minipc-outbound-proxy
+bridge=br-minipc-proxy
+expected='bridge true br-minipc-proxy 192.168.70.0/28 192.168.70.1'
+format='{{.Driver}} {{.Internal}} {{index .Options "com.docker.network.bridge.name"}} {{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'
+
+if ! docker network inspect "$network" >/dev/null 2>&1; then
+    docker network create --driver bridge --internal --subnet 192.168.70.0/28 \
+        --gateway 192.168.70.1 --opt "com.docker.network.bridge.name=$bridge" "$network" >/dev/null
+fi
+test "$(docker network inspect --format "$format" "$network")" = "$expected"
+ip -4 addr show dev "$bridge" | grep -Fq '192.168.70.1/28'
+nft -f /etc/minipc-proxy/input.nft

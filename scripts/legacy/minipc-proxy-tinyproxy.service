@@ -1,0 +1,17 @@
+[Unit]
+Description=MiniPC local authenticated outbound HTTP proxy
+Requires=minipc-proxy-stunnel.service minipc-proxy-network.service
+After=minipc-proxy-stunnel.service minipc-proxy-network.service
+PartOf=minipc-proxy-network.service
+
+[Service]
+ExecStart=/bin/sh -ec 'config=/run/minipc-proxy/active/tinyproxy.conf; test -f "$$config" || config=/etc/minipc-proxy/verified/tinyproxy.conf; exec /usr/bin/tinyproxy -d -c "$$config"'
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

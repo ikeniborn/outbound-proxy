@@ -1,0 +1,8 @@
+[Unit]
+Description=Check MiniPC outbound proxy and verify standby on failure
+After=minipc-proxy-tinyproxy.service
+Requisite=minipc-proxy-tinyproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/minipc-proxy-apply --check-failover
