@@ -21,7 +21,8 @@ docker pull "ghcr.io/ikeniborn/outbound-proxy@$image_digest"
 For a fork, open **Actions → Verify image → Artifacts** and download the ZIP. Extract it to a new directory. On a Linux AMD64 host, import the local platform for inspection or testing with Skopeo.
 
 ```bash
-skopeo --override-os linux --override-arch amd64 copy oci-archive:image.oci.tar docker-daemon:outbound-proxy:review
+skopeo --override-os linux --override-arch amd64 copy oci-archive:image.oci.tar docker-archive:platform-image.tar:outbound-proxy:review
+docker image load --input platform-image.tar
 ```
 
 Use `arm64` on an ARM64 host. A fork artifact contains contributor code. Run it on an isolated test machine.

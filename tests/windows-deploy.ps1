@@ -101,7 +101,10 @@ try {
             deployment=@{image=$localId}}
         $script:forwardChecks = 0
         function Invoke-Docker($Arguments) { return (ConvertTo-Json $script:testState -Depth 4) }
-        function Test-Forwarding($Config) { $script:forwardChecks++ }
+        $script:upstreamHealthy=$true
+        $script:localListenerHealthy=$true
+        function Test-Forwarding($Config) { $script:forwardChecks++; return $script:upstreamHealthy }
+        function Assert-ForwardListener($Config) { if (!$script:localListenerHealthy) { throw 'local listener failed' } }
         Test-Operator $config 'container' 1
         Assert ($script:forwardChecks -eq 0) 'Stopped service generated forwarding traffic'
         $script:testState.enabled=$true; $script:testState.boot_enabled=$true
@@ -109,10 +112,51 @@ try {
         $script:testState.running=$true
         Test-Operator $config 'container' 1
         Assert ($script:forwardChecks -eq 1) 'Enabled service skipped the fresh HTTPS check'
+        $script:upstreamHealthy=$false
+        Expect-Failure { Test-Operator $config 'container' 1 } 'Fresh HTTPS forwarding'
+        $warning = Test-Operator $config 'container' 1 -Restoring 3>&1
+        Assert ("$warning" -match 'restored locally.*HTTPS forwarding failed') 'Unverified upstream was not reported on rollback'
+        $script:localListenerHealthy=$false
+        Expect-Failure { Test-Operator $config 'container' 1 -Restoring } 'local listener failed'
         $script:testState.recovery_pending=$true
         Expect-Failure { Test-Operator $config 'container' 1 } 'pending recovery'
         $script:testState.Remove('running')
         Expect-Failure { Test-Operator $config 'container' 1 } 'incomplete runtime status'
+    }
+
+    & {
+        $id = 'f' * 64
+        $old = [pscustomobject]@{port=18888; image=$localId; lan=$null; clients=$false}
+        $new = [pscustomobject]@{port=19999; image=$localId; lan=$null; clients=$false}
+        $journal = [pscustomobject]@{owner='ours'; active=$old; pending=$new}
+        $script:events = @()
+        $script:unsafe = $false
+        function Invoke-Compose($Config,$Owner,$Commands) {
+            $script:events += "$($Commands[0]):$($Config.port)"
+            if ($Commands[0] -eq 'ps') { return $id }
+        }
+        function Get-Inspection($Arguments) {
+            if ($Arguments[0] -eq 'network') { return [pscustomobject]@{Containers=[pscustomobject]@{$id=@{}}} }
+            return [pscustomobject]@{Image=$localId; NetworkSettings=@{Ports=@{
+                '18890/tcp'=@(@{HostIp='127.0.0.1'; HostPort='18890'})
+                '18888/tcp'=@(@{HostIp='127.0.0.1'; HostPort='18888'})
+            }}}
+        }
+        function Invoke-Docker($Arguments) {
+            if ($Arguments[0] -eq 'image') { return $localId }
+            return (ConvertTo-Json @{enabled=$true; running=$true; boot_enabled=$true; recovery_pending=$false; deployment=@{image=$localId}})
+        }
+        function Test-Isolation($Config) {}
+        function Wait-Page($Number,$Marker) {}
+        function Test-Denial($Config,$Number,[switch]$Live) { if ($script:unsafe) { throw 'panel isolation failed' } }
+        function Test-Forwarding($Config) { return $false }
+        function Assert-ForwardListener($Config) { $script:events += "listener:$($Config.port)" }
+        $warning = Restore-Record $journal 3>&1
+        Assert ("$warning" -match 'restored locally') 'Rollback did not disclose unavailable upstream'
+        Assert (($script:events -join ',') -eq 'down:19999,up:18888,ps:18888,listener:18888') 'External failure removed the recovered panel'
+        $script:unsafe=$true
+        Expect-Failure { Restore-Record $journal } 'panel isolation failed'
+        Assert ($script:events[-1] -eq 'down:18888') 'An isolation failure left the recovered panel exposed'
     }
 
     & {
@@ -182,6 +226,8 @@ try {
         $script:badIsolation = $false
         $script:badPort = 0
         $script:rejectLanCanary = $false
+        $script:previousOffline = $false
+        $script:failedRecovery = $false
         function Assert-LanAdministrator {}
         function Get-LanScope($Config) { return @{} }
         function Assert-FirewallProfiles($Config,$Scope) {}
@@ -197,10 +243,16 @@ try {
         function Resolve-Image($Reference) { if ($Reference -eq 'missing') { throw 'pull failed' }; return $localId }
         function Invoke-Compose($Config,$Owner,$Commands) {
             $script:events += "$($Commands[0]):$($Config.port)"
+            if ($Commands[0] -eq 'ps' -and $Commands -contains '-q') { return ('a' * 64) }
             return ''
         }
         function Test-Isolation($Config) { if ($script:badIsolation) { throw 'reachable through host gateway' } }
-        function Test-Service($Config,$Owner) { if ($script:badPort -eq $Config.port) { throw 'failed verification' } }
+        function Test-Operator($Config,$Id) { if ($script:previousOffline) { throw 'Fresh HTTPS forwarding through the host proxy failed.' } }
+        function Test-Service($Config,$Owner,[switch]$Restoring) {
+            if ($script:badPort -eq $Config.port) { throw 'failed verification' }
+            if ($Restoring -and $script:failedRecovery) { throw 'restored isolation failed' }
+            if ($Restoring) { $script:events += 'restored:local-checks' }
+        }
 
         $Action='install'; $Image=$localId; $Port=18888
         $null = Invoke-Deployment
@@ -214,11 +266,21 @@ try {
         Expect-Failure { Invoke-Deployment } 'reachable through host gateway'
         Assert ($script:events.Count -eq $before+1 -and $script:events[-1] -eq 'config:19999') 'Canary failure changed container'
         Assert ([IO.File]::ReadAllText($state) -ceq $initial) 'Preflight changed committed state'
-        $script:badIsolation=$false; $script:badPort=19999
+        $script:badIsolation=$false; $script:previousOffline=$true
+        $before=$script:events.Count
+        Expect-Failure { Invoke-Deployment } 'Fresh HTTPS forwarding'
+        Assert (($script:events[$before..($script:events.Count-1)] -join ',') -eq 'config:19999,ps:18888') 'Offline upstream disrupted the previous service'
+        Assert ([IO.File]::ReadAllText($state) -ceq $initial) 'Offline preflight changed the deployment journal'
+        $script:previousOffline=$false; $script:badPort=19999
         Expect-Failure { Invoke-Deployment } 'failed verification'
         $saved = ConvertFrom-Json ([IO.File]::ReadAllText($state))
         Assert ($saved.active.port -eq 18888 -and !$saved.pending) 'Failed update did not restore previous state'
-        Assert ($script:events[-1] -eq 'up:18888') 'Previous service was not restored'
+        Assert ($script:events[-2] -eq 'up:18888' -and $script:events[-1] -eq 'restored:local-checks') 'Previous service was not restored locally'
+        $script:failedRecovery=$true
+        Expect-Failure { Invoke-Deployment } 'restored isolation failed'
+        Assert ($script:events[-1] -eq 'down:18888') 'Unsafe restored service was kept running'
+        Assert ((ConvertFrom-Json ([IO.File]::ReadAllText($state))).pending.port -eq 19999) 'Failed isolation lost the recovery journal'
+        $script:failedRecovery=$false
         $script:badPort=0
         $null = Invoke-Deployment
         $Port=0; $Action='rollback'
@@ -241,7 +303,7 @@ try {
         $start=$script:events.Count
         $null = Invoke-Deployment
         $changes = $script:events[$start..($script:events.Count-1)] -join ','
-        Assert ($changes -eq 'config:18888,down:18888,firewall:remove,firewall:install,lan:canary,up:18888') 'Catalog started before the firewall and LAN canary'
+        Assert ($changes -eq 'config:18888,ps:18888,down:18888,firewall:remove,firewall:install,lan:canary,up:18888') 'Catalog started before the firewall and LAN canary'
         $Action='remove'; $Lan=$null; $Subnet=$null
         $null = Invoke-Deployment
         Assert ($script:events[-2] -eq 'down:18888' -and $script:events[-1] -eq 'firewall:remove') 'Firewall removed while port was still published'

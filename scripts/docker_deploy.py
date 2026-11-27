@@ -357,31 +357,49 @@ def read_status(cid):
         raise Error("Installed CLI did not return a valid credential-free status.") from None
 
 
+class RouteUnavailable(Error):
+    """Local forwarding passed its checks but the HTTPS request did not complete."""
+
+
 def previous_status(config, owner):
     if config:
         cid = compose(config, owner, "ps", "-q", "proxy")
         if cid:
-            try:
-                return read_status(cid)
-            except Error:
-                # Explicit recovery must also work when the previous supervisor is broken.
-                pass
+            view = verify_cli(cid, None)
+            if view["enabled"]:
+                try:
+                    verify_forwarding(config)
+                except RouteUnavailable as error:
+                    raise RouteUnavailable("Update stopped before replacement. Fix the active upstream in the "
+                                           "local panel or disable forwarding, then retry.") from error
+            return view
     return None
 
 
-def verify_cli(cid, config, expected):
+def verify_cli(cid, expected):
     view = read_status(cid)
     if view["recovery_pending"] or view["enabled"] != view["running"]:
         raise Error("The installed supervisor reports pending recovery or inconsistent forwarding state.")
     if expected and (any(expected[key] != view[key] for key in ("enabled", "upstreams", "failover"))
                      or (not expected["failover"] and expected["selected"] != view["selected"])):
         raise Error("The replacement changed the committed route or catalog.")
-    if view["enabled"]:
+    return view
+
+
+def verify_forwarding(config):
+    try:
+        with socket.create_connection(("127.0.0.1", config["port"]), timeout=2):
+            pass
+    except OSError:
+        raise Error("The published local forwarding port did not accept a connection.") from None
+    try:
         proof = run("curl", "-q", "--silent", "--max-time", "15", "--noproxy", "", "--proxy",
                     f"http://127.0.0.1:{config['port']}", "--output", os.devnull, "--write-out",
                     "%{http_connect} %{http_code}", "https://example.com/")
-        if proof != "200 200":
-            raise Error("The published host port failed the fresh HTTPS forwarding probe.")
+    except (OSError, RuntimeError):
+        raise RouteUnavailable("The published host port failed the fresh HTTPS forwarding probe.") from None
+    if proof != "200 200":
+        raise RouteUnavailable("The published host port failed the fresh HTTPS forwarding probe.")
 
 
 def verify(config, owner, linux, expected=None):
@@ -395,7 +413,7 @@ def verify(config, owner, linux, expected=None):
     if set(members) != {cid}:
         raise Error("The host ingress network must contain only the proxy service.")
     await_panel(18890, b"outbound proxy")
-    verify_cli(cid, config, expected)
+    view = verify_cli(cid, expected)
     targets = [INGRESS, "engine-gateway"]
     if not linux:
         targets.append("host.docker.internal")
@@ -403,6 +421,8 @@ def verify(config, owner, linux, expected=None):
         targets.append(config["lan"])
     for network in ["bridge"] + ([CLIENT_NET] if config["clients"] else []):
         probe_denial(config, network, 18890, targets + ([CLIENT_IP] if network == CLIENT_NET else []))
+    if view["enabled"]:
+        verify_forwarding(config)
 
 
 def available_port(address, port):
@@ -477,6 +497,10 @@ def restore(previous, candidate, owner, linux, expected=None):
             verify(previous, owner, linux, expected)
             validate_mapping(previous, previous, linux, saved=True)
             install_policy(previous, owner, linux)
+        except RouteUnavailable as error:
+            raise RouteUnavailable("Previous local panel and service restored. LAN stays closed while the HTTPS "
+                                   "probe fails. Fix the upstream or disable forwarding in the panel, then "
+                                   "rerun reconfigure to finish recovery.") from error
         except (OSError, RuntimeError, ValueError, KeyboardInterrupt):
             compose(previous, owner, "down")
             raise
@@ -530,13 +554,13 @@ def deploy(args, path):
         if args.action == "reconfigure" and not active:
             raise Error("Install the service before reconfiguration.")
         candidate = configure(args, active, linux)
+    expected = previous_status(active, owner)
     if linux:
         check_routes(candidate["clients"])
     if candidate["clients"]:
         prepare_clients()
     compose(candidate, owner, "config", "--quiet")
     preflight_loopback(candidate, linux)
-    expected = previous_status(active, owner)
     atomic_json(path, dict(record, pending=candidate))
     try:
         install_policy(None, owner, linux, active, candidate)
@@ -546,9 +570,9 @@ def deploy(args, path):
             boot_policy(candidate, owner, path, linux)
         install_policy(candidate, owner, linux)
         committed = dict(record, active=candidate, previous=active if candidate != active else record["previous"])
-        atomic_json(path, committed)
         if not linux:
             boot_policy(candidate, owner, path, linux)
+        atomic_json(path, committed)
     except (OSError, RuntimeError, ValueError, KeyboardInterrupt):
         restore(active, candidate, owner, linux, expected)
         boot_policy(active, owner, path, linux)

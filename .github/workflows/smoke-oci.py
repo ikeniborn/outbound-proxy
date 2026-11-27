@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from playwright.sync_api import sync_playwright
 
@@ -60,8 +61,11 @@ def smoke(layout):
     if json.loads(deploy("status"))["settings"] is not None:
         raise RuntimeError("The OCI smoke test requires a fresh deployment.")
     candidate = amd64_image_id(layout)
-    run("skopeo", "--override-os", "linux", "--override-arch", "amd64", "copy",
-        "oci:" + str(layout), "docker-daemon:" + TAG)
+    with tempfile.TemporaryDirectory() as temp:
+        archive = Path(temp) / "candidate.tar"
+        run("skopeo", "--override-os", "linux", "--override-arch", "amd64", "copy",
+            "oci:" + str(layout), f"docker-archive:{archive}:{TAG}")
+        run("docker", "image", "load", "--input", str(archive))
     assert run("docker", "image", "inspect", "--format", "{{.Id}}", TAG) == candidate
     try:
         deploy("install", "--local-only", "--image", candidate)

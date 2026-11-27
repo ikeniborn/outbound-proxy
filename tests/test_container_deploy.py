@@ -165,7 +165,7 @@ class DeploymentTests(unittest.TestCase):
             path.write_text(json.dumps({"owner": "one", "active": LAN, "previous": None}))
             candidate = dict(LAN, port=19999)
             for name, value in (("local_engine", True), ("run", ""), ("configure", candidate),
-                                ("preflight_loopback", None), ("check_routes", None), ("boot_policy", None), ("validate_mapping", None)):
+                                ("preflight_loopback", None), ("check_routes", None), ("boot_policy", None), ("validate_mapping", None), ("previous_status", None)):
                 stack.enter_context(patch.object(deploy, name, return_value=value))
             compose = stack.enter_context(patch.object(deploy, "compose"))
             verify = stack.enter_context(patch.object(deploy, "verify", side_effect=[deploy.Error("health failed"), None]))
@@ -184,7 +184,7 @@ class DeploymentTests(unittest.TestCase):
             path = Path(directory) / "deployment.json"
             initial = {"owner": "one", "active": LOCAL, "previous": None}
             path.write_text(json.dumps(initial))
-            for name, value in (("local_engine", False), ("run", ""), ("configure", LOCAL)):
+            for name, value in (("local_engine", False), ("run", ""), ("configure", LOCAL), ("previous_status", None)):
                 stack.enter_context(patch.object(deploy, name, return_value=value))
             stack.enter_context(patch.object(deploy, "preflight_loopback", side_effect=deploy.Error("isolation failed")))
             compose = stack.enter_context(patch.object(deploy, "compose"))
@@ -213,17 +213,17 @@ class DeploymentTests(unittest.TestCase):
                         dict(status, uri="https://bad.example/")):
             with patch.object(deploy, "run", return_value=json.dumps(invalid)):
                 with self.assertRaises(deploy.Error):
-                    deploy.verify_cli("id", LOCAL, None)
-        with patch.object(deploy, "run", side_effect=[json.dumps(status), "200 200"]) as run:
-            deploy.verify_cli("id", LOCAL, status)
+                    deploy.verify_cli("id", None)
+        with patch.object(deploy, "run", return_value="200 200") as run, patch.object(deploy.socket, "create_connection"):
+            deploy.verify_forwarding(LOCAL)
             self.assertIn("http://127.0.0.1:18888", run.call_args.args)
             self.assertIn("https://example.com/", run.call_args.args)
-        with patch.object(deploy, "run", side_effect=[json.dumps(status), "200 503"]):
-            with self.assertRaisesRegex(deploy.Error, "HTTPS"):
-                deploy.verify_cli("id", LOCAL, status)
+        with patch.object(deploy, "run", return_value="200 503"), patch.object(deploy.socket, "create_connection"):
+            with self.assertRaisesRegex(deploy.RouteUnavailable, "HTTPS"):
+                deploy.verify_forwarding(LOCAL)
         with patch.object(deploy, "run", return_value=json.dumps(status)):
             with self.assertRaisesRegex(deploy.Error, "changed"):
-                deploy.verify_cli("id", LOCAL, dict(status, selected="old"))
+                deploy.verify_cli("id", dict(status, selected="old"))
 
     def test_pending_remove_never_restores_a_service_or_opens_lan(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "local_engine", return_value=True), \
@@ -253,6 +253,76 @@ class DeploymentTests(unittest.TestCase):
             with patch.object(deploy, "available_port", side_effect=deploy.Error("port occupied")):
                 with self.assertRaisesRegex(deploy.Error, "port occupied"):
                     deploy.validate_mapping(dict(LOCAL, port=19999), LOCAL, True, saved=True)
+
+    def test_unavailable_active_route_blocks_reconfigure_and_rollback_before_any_replacement(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            path = Path(directory) / "deployment.json"
+            initial = {"owner": "one", "active": LOCAL, "previous": dict(LOCAL, port=19999)}
+            path.write_text(json.dumps(initial))
+            stack.enter_context(patch.object(deploy, "local_engine", return_value=False))
+            stack.enter_context(patch.object(deploy, "run", return_value=""))
+            stack.enter_context(patch.object(deploy, "validate_mapping"))
+            stack.enter_context(patch.object(deploy, "verify_cli", return_value={"enabled": True}))
+            stack.enter_context(patch.object(deploy, "verify_forwarding", side_effect=deploy.RouteUnavailable("offline")))
+            compose = stack.enter_context(patch.object(deploy, "compose", return_value="id"))
+            policy = stack.enter_context(patch.object(deploy, "install_policy"))
+            for action in ("reconfigure", "rollback"):
+                with self.assertRaisesRegex(deploy.RouteUnavailable, "before replacement"):
+                    deploy.deploy(args(action), path)
+                self.assertEqual(json.loads(path.read_text()), initial)
+            self.assertTrue(all(c.args[2:] == ("ps", "-q", "proxy") for c in compose.call_args_list))
+            policy.assert_not_called()
+
+    def test_mac_persistence_and_failed_restore_leave_journal_pending(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            path = Path(directory) / "deployment.json"
+            candidate = dict(LOCAL, port=19999)
+            path.write_text(json.dumps({"owner": "one", "active": LOCAL, "previous": None}))
+            for name, result in (("local_engine", False), ("run", ""), ("configure", candidate),
+                                 ("previous_status", None), ("compose", None), ("preflight_loopback", None),
+                                 ("install_policy", None), ("verify", None), ("validate_mapping", None)):
+                stack.enter_context(patch.object(deploy, name, return_value=result))
+            states = []
+            def reject_fragment(config, owner, state, linux):
+                states.append(json.loads(state.read_text()))
+                raise deploy.Error("PF boot fragment unavailable")
+            stack.enter_context(patch.object(deploy, "boot_policy", side_effect=reject_fragment))
+            with self.assertRaisesRegex(deploy.Error, "PF boot fragment"):
+                deploy.deploy(args("reconfigure"), path)
+            self.assertEqual(len(states), 2)
+            self.assertTrue(all(s["pending"] == candidate and s["active"] == LOCAL for s in states))
+            self.assertEqual(json.loads(path.read_text()), states[0])
+
+    def test_pending_restore_keeps_local_panel_only_after_verified_isolation(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            path = Path(directory) / "deployment.json"
+            initial = {"owner": "one", "active": LOCAL, "pending": dict(LOCAL, port=19999), "previous": None}
+            path.write_text(json.dumps(initial))
+            stack.enter_context(patch.object(deploy, "local_engine", return_value=True))
+            stack.enter_context(patch.object(deploy, "verify_resources"))
+            stack.enter_context(patch.object(deploy, "await_panel"))
+            stack.enter_context(patch.object(deploy, "verify_cli", return_value={"enabled": True}))
+            compose = stack.enter_context(patch.object(deploy, "compose", return_value="cid"))
+            policy = stack.enter_context(patch.object(deploy, "install_policy"))
+            denied = stack.enter_context(patch.object(deploy, "probe_denial"))
+            external = stack.enter_context(patch.object(deploy, "verify_forwarding",
+                                                        side_effect=deploy.RouteUnavailable("offline")))
+            runs = ["", "image", "image", '[{"Containers":{"cid":{}}}]']
+            with patch.object(deploy, "run", side_effect=runs):
+                with self.assertRaisesRegex(deploy.RouteUnavailable, "Previous local panel and service restored"):
+                    deploy.deploy(args("reconfigure"), path)
+            denied.assert_called_once()
+            external.assert_called_once()
+            self.assertEqual(json.loads(path.read_text()), initial)
+            self.assertTrue(all("down" not in c.args for c in compose.call_args_list))
+            self.assertTrue(all(c.args[0] is None for c in policy.call_args_list))
+            denied.side_effect = deploy.Error("control port exposed")
+            with patch.object(deploy, "run", side_effect=runs):
+                with self.assertRaisesRegex(deploy.Error, "control port exposed"):
+                    deploy.deploy(args("reconfigure"), path)
+            self.assertEqual(compose.call_args.args[-1], "down")
+            external.assert_called_once()
+            self.assertEqual(json.loads(path.read_text()), initial)
 
     def test_remove_retains_volume_and_can_run_twice(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "local_engine", return_value=False), \

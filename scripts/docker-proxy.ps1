@@ -215,10 +215,19 @@ function Test-Isolation($Config) {
 
 function Test-Forwarding($Config) {
     $result = & curl.exe --disable --silent --show-error --noproxy unused.invalid --proxy "http://127.0.0.1:$($Config.port)" --max-time 20 --output NUL --write-out '%{http_connect} %{http_code}' https://example.com/
-    if ($LASTEXITCODE -ne 0 -or $result -ne '200 200') { throw 'Fresh HTTPS forwarding through the host proxy failed.' }
+    if ($LASTEXITCODE -in @(5,7)) { throw 'The host forwarding listener could not be reached.' }
+    return ($LASTEXITCODE -eq 0 -and $result -eq '200 200')
 }
 
-function Test-Operator($Config, $Id, [int]$Attempts=30) {
+function Assert-ForwardListener($Config) {
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $connection = $client.ConnectAsync([Net.IPAddress]::Loopback,[int]$Config.port)
+        if (!$connection.Wait(3000)) { throw 'The host forwarding listener timed out.' }
+    } finally { $client.Dispose() }
+}
+
+function Test-Operator($Config, $Id, [int]$Attempts=30, [switch]$Restoring) {
     for ($i=1; $i -le $Attempts; $i++) {
         $state = ConvertFrom-Json (Invoke-Docker @('exec',$Id,'outbound-proxy','status'))
         foreach ($field in @('enabled','running','boot_enabled','recovery_pending')) {
@@ -226,7 +235,11 @@ function Test-Operator($Config, $Id, [int]$Attempts=30) {
         }
         if ($state.deployment.image -cne $Config.image) { throw 'The CLI reports another deployment image.' }
         if (!$state.recovery_pending -and $state.enabled -eq $state.running -and $state.enabled -eq $state.boot_enabled) {
-            if ($state.enabled) { Test-Forwarding $Config }
+            if ($state.enabled -and !(Test-Forwarding $Config)) {
+                if (!$Restoring) { throw 'Fresh HTTPS forwarding through the host proxy failed.' }
+                Assert-ForwardListener $Config
+                Write-Warning 'Previous deployment restored locally. Fresh HTTPS forwarding failed. Check the configured upstream.'
+            }
             return
         }
         if ($i -lt $Attempts) { Start-Sleep -Milliseconds 500 }
@@ -234,7 +247,7 @@ function Test-Operator($Config, $Id, [int]$Attempts=30) {
     throw 'The installed CLI reports an inconsistent deployment or pending recovery.'
 }
 
-function Test-Service($Config, $Owner) {
+function Test-Service($Config, $Owner, [switch]$Restoring) {
     $id = Invoke-Compose $Config $Owner @('ps','-q','proxy')
     if ($id -notmatch '^[0-9a-f]{64}$') { throw 'Expected one running service container.' }
     $inspection = Get-Inspection @('inspect',$id)
@@ -254,7 +267,7 @@ function Test-Service($Config, $Owner) {
     }
     Wait-Page 18890 'Outbound Proxy'
     Test-Denial $Config 18890 -Live
-    Test-Operator $Config $id
+    Test-Operator $Config $id -Restoring:$Restoring
 }
 
 function Save-Record($Record, $Path) {
@@ -279,7 +292,7 @@ function Restore-Record($Record) {
                 Test-LanListener $Record.active
             }
             $null = Invoke-Compose $Record.active $Record.owner @('up','-d','--pull','never')
-            Test-Service $Record.active $Record.owner
+            Test-Service $Record.active $Record.owner -Restoring
         } catch {
             $null = Invoke-Compose $Record.active $Record.owner @('down')
             throw
@@ -356,6 +369,13 @@ function Invoke-Deployment {
         if ($candidate.clients) { Initialize-Clients }
         $null = Invoke-Compose $candidate $record.owner @('config','--quiet')
         Test-Isolation $candidate
+        if ($active) {
+            $currentId = Invoke-Compose $active $record.owner @('ps','-q','proxy')
+            if ($currentId) {
+                if ($currentId -notmatch '^[0-9a-f]{64}$') { throw 'Expected one active service to verify before replacement.' }
+                Test-Operator $active $currentId
+            }
+        }
         $record.pending = $candidate
         Save-Record $record $path
         try {
