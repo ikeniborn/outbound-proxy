@@ -2,7 +2,7 @@
 
 Install from `ghcr.io/ikeniborn/outbound-proxy@sha256:<index-digest>`. Copy the full reference from the **Publish verified image** run summary. The digest identifies the same OCI index on Linux AMD64 and ARM64. Use installation scripts from the Git revision in that summary.
 
-PRs and pushes to `test` or `master` skip **Verify image** when every changed file is the root `README.md` or a Markdown file under `docs/`. Such revisions produce no image artifact. Use a promotion that passed image verification for a release. Mixed changes follow the build process below.
+Documentation-only PRs run the promotion and path checks. The service tests, Windows checks and image build are skipped when all changes are to the root `README.md` or Markdown under `docs/`. Documentation-only pushes skip the workflow. Use a promotion that produced a verified image for a release.
 
 | Source | Checks and delivery |
 |---|---|
@@ -32,9 +32,9 @@ Use `arm64` on an ARM64 host. A fork artifact contains contributor code. Run it 
 ## Bootstrap the trusted publisher
 
 1. Review both workflow files and their publishing helpers through the initial promotion into the default branch, `master`. Synchronize `test` with that baseline. GitHub loads the downstream `workflow_run` workflow from the default branch.
-2. Protect `test` and `master`. Require the **tests**, **Windows installer** and **verify** jobs on each branch and reviewed PRs for promotion into `master`. Restrict release-tag creation and changes to the release maintainers.
+2. Protect `test` and `master`. Require a pull request and the **tests**, **Windows installer** and **verify** checks on both branches. Promote from `test` through a PR into `master`. A merged promotion authorizes the release. Restrict release-tag creation and changes to the release maintainers.
 3. Keep fork PR tokens read-only. Keep fork secrets disabled. Use forks for contributors without repository write authority. Reserve same-repository branches for trusted collaborators.
-4. Create the `ghcr-images` and `stable-release` environments. Restrict deployments in both environments to `master`. Configure required reviewers on `stable-release`.
+4. Create the `ghcr-images` and `stable-release` environments. Restrict deployments in both environments to `master`. Use the merged promotion as the approval for `stable-release`.
 5. Confirm the package visibility, intended readers and the repository's package write access with the owner. For an existing package, grant this repository Actions access in its package settings. Set the repository Actions variable `GHCR_PUBLISH_ENABLED` to `true` only after approval.
 6. Open a feature PR into `test`. Compare its checked head, publisher summary and downloaded digest. Repeat with a new revision and pull the earlier digest to verify retention.
 
@@ -45,6 +45,6 @@ The publisher validates the repository, workflow ID, workflow file, event, PR as
 1. Merge the reviewed `test` promotion into `master`. Wait for **Verify image** on the resulting commit.
 2. Publish a GitHub release for a protected `vX.Y.Z` tag at that merge commit. Choose its latest-release status.
 3. Open **Actions → Publish verified image → Run workflow**. Select `master` and enter the published tag.
-4. Approve the `stable-release` deployment. Check the publisher summary for the commit and exact install reference.
+4. Check the publisher summary for the commit and exact install reference. Confirm that the public `stable` tag resolves to the verified OCI index digest without registry credentials.
 
 Use the artifact during its 30-day retention period. If it has expired, rerun **Verify image** for the same `master` push and review the new attempt and digest. A revision or release tag already assigned to different content causes publication to fail. Roll back an installation by selecting its previously recorded digest and matching scripts. Keep the referenced package version in GHCR while that rollback is needed.
