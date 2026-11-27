@@ -1,11 +1,13 @@
 """Install the verified OCI image and exercise it on a clean, disposable Linux Engine."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 from playwright.sync_api import sync_playwright
@@ -60,13 +62,18 @@ def smoke(layout):
         raise RuntimeError("The OCI smoke test requires a disposable Engine with an empty catalog.")
     if json.loads(deploy("status"))["settings"] is not None:
         raise RuntimeError("The OCI smoke test requires a fresh deployment.")
-    candidate = amd64_image_id(layout)
+    config_id = amd64_image_id(layout)
     with tempfile.TemporaryDirectory() as temp:
         archive = Path(temp) / "candidate.tar"
         run("skopeo", "--override-os", "linux", "--override-arch", "amd64", "copy",
             "oci:" + str(layout), f"docker-archive:{archive}:{TAG}")
+        with tarfile.open(archive) as contents:
+            manifest, = json.load(contents.extractfile("manifest.json"))
+            config = contents.extractfile(manifest["Config"]).read()
+            assert "sha256:" + hashlib.sha256(config).hexdigest() == config_id
         run("docker", "image", "load", "--input", str(archive))
-    assert run("docker", "image", "inspect", "--format", "{{.Id}}", TAG) == candidate
+    # Containerd and the classic image store use different local image IDs.
+    candidate = run("docker", "image", "inspect", "--format", "{{.Id}}", TAG)
     try:
         deploy("install", "--local-only", "--image", candidate)
         cid, = run(*SERVICE).splitlines()
