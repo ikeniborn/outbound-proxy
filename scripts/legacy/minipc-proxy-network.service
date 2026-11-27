@@ -1,0 +1,10 @@
+[Unit]
+Description=MiniPC proxy bridge and input policy
+Requires=docker.service
+After=docker.service ufw.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/minipc-proxy-network

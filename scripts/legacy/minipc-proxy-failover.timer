@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the active MiniPC outbound proxy each minute
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

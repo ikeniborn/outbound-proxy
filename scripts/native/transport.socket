@@ -1,0 +1,9 @@
+[Unit]
+Description=Private socket for the outbound TLS transport
+
+[Socket]
+ListenStream=127.0.0.1:18889
+Accept=yes
+MaxConnections=100
+# Retain the private listener under bursts of local connection attempts.
+TriggerLimitIntervalSec=0

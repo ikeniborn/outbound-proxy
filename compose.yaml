@@ -1,0 +1,38 @@
+name: outbound-proxy
+services:
+  proxy:
+    image: ${OP_IMAGE:?Select an immutable image with the deployment script}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+    environment:
+      OP_IMAGE: ${OP_IMAGE}
+      OP_HOST_PORT: "${OP_HOST_PORT:-18888}"
+      OP_LAN_IP: "${OP_LAN_IP:-}"
+      OP_MANAGEMENT_IP: 172.29.240.2
+      OP_FORWARD_IP: 172.29.240.2
+      OP_MANAGEMENT_SOURCES: "172.29.240.1/32,127.0.0.1/32"
+      OP_FORWARD_SOURCES: "${OP_FORWARD_SOURCES:-172.29.240.1/32,127.0.0.1/32}"
+    ports:
+      - "127.0.0.1:18890:18890/tcp"
+      - "127.0.0.1:${OP_HOST_PORT:-18888}:18888/tcp"
+    networks:
+      ingress:
+        ipv4_address: 172.29.240.2
+        gw_priority: 1
+    volumes:
+      - catalog:/var/lib/outbound-proxy
+networks:
+  ingress:
+    name: outbound-proxy-ingress
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.240.0/28
+          gateway: 172.29.240.1
+volumes:
+  catalog:
+    name: outbound-proxy-catalog

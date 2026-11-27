@@ -1,0 +1,13 @@
+[Unit]
+Description=Local outbound proxy management panel
+
+[Service]
+ExecStart=@LAUNCHER@ panel-serve
+Restart=on-failure
+RestartSec=2
+UMask=0077
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

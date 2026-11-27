@@ -1,0 +1,17 @@
+[Unit]
+Description=Outbound proxy @ROLE@
+After=network-online.target
+@RELATION@
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+ExecStart=@COMMAND@
+@IO@
+StandardError=null
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+UMask=0077

@@ -1,0 +1,90 @@
+name: Publish verified image
+on:
+  workflow_run:
+    workflows: [Verify image]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published stable release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'ikeniborn/outbound-proxy' &&
+      github.ref == 'refs/heads/master' && vars.GHCR_PUBLISH_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      ((github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'test') ||
+      (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].base.ref == 'test'))))
+    runs-on: ubuntu-24.04
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'stable-release' || 'ghcr-images' }}
+    concurrency:
+      group: ghcr-${{ github.event_name == 'workflow_dispatch' && 'release' || github.event.workflow_run.pull_requests[0].number || 'test' }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      packages: write
+      statuses: write
+    steps:
+      - name: Read the publishing rules from the trusted default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/workflows
+      - id: qualified
+        name: Verify producer, revision, platform manifests and artifact digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/workflows/qualify-image.sh
+      - name: Publish the verified index by digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.qualified.outputs.tag }}
+          REVISION: ${{ steps.qualified.outputs.revision }}
+          DIGEST: ${{ steps.qualified.outputs.digest }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends skopeo
+          export REGISTRY_AUTH_FILE="$RUNNER_TEMP/registry-auth.json"
+          trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
+          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$REGISTRY_AUTH_FILE" -u "$GITHUB_ACTOR" --password-stdin ghcr.io
+          image="ghcr.io/$GITHUB_REPOSITORY"
+          skopeo copy --all --preserve-digests "oci:$RUNNER_TEMP/layout" "docker://$image@$DIGEST"
+          if [[ $TAG == v* ]]; then
+            [[ $(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq '.sha') == "$REVISION" ]]
+          fi
+          if old=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$image:$TAG" 2>"$RUNNER_TEMP/tag-error"); then
+            test "$old" = "$DIGEST"
+          else
+            # A missing manifest is the only registry response that permits creating a tag.
+            grep -Fqi 'manifest unknown' "$RUNNER_TEMP/tag-error" || { cat "$RUNNER_TEMP/tag-error" >&2; exit 1; }
+            skopeo copy --all --preserve-digests "docker://$image@$DIGEST" "docker://$image:$TAG"
+          fi
+          test "$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$image:$TAG")" = "$DIGEST"
+          case "$TAG" in
+            test-*)
+              [[ $(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/test" --jq '.object.sha') == "$REVISION" ]]
+              skopeo copy --all --preserve-digests "docker://$image@$DIGEST" "docker://$image:test"
+              ;;
+            v*)
+              if [[ $(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name') == "$TAG" ]]; then
+                skopeo copy --all --preserve-digests "docker://$image@$DIGEST" "docker://$image:stable"
+              fi
+              ;;
+            pr-*)
+              gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$REVISION" -f state=success -f context='GHCR preview' \
+                -f description="$DIGEST" -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
+              ;;
+          esac
+          printf 'Qualified Git revision **%s**\n\nImage tag **%s:%s**\n\nInstall **%s@%s**\n' \
+            "$REVISION" "$image" "$TAG" "$image" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
