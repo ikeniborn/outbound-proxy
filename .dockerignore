@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!scripts/
+!scripts/minipc_proxy_apply.py
+!scripts/outbound_proxy/
+!scripts/outbound_proxy/*.py
+!scripts/outbound_proxy/web/
+!scripts/outbound_proxy/web/*
+!scripts/container-cli

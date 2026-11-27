@@ -1,0 +1,5 @@
+#!/usr/bin/python3
+from outbound_proxy.container_cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -47,8 +47,11 @@ class ManagementServer(ThreadingHTTPServer):
     # Drain in-flight requests when the service closes its listener.
     daemon_threads = False
 
-    def __init__(self, ops):
-        super().__init__(("127.0.0.1", PANEL_PORT), Handler)
+    auth_paths = ("/api/pair", "/api/challenge", "/api/login")
+    local_session = False
+
+    def __init__(self, ops, address="127.0.0.1"):
+        super().__init__((address, PANEL_PORT), Handler)
         self.ops = ops
         self.authority = f"127.0.0.1:{self.server_port}"
         self.origin = f"http://{self.authority}"
@@ -61,6 +64,13 @@ class ManagementServer(ThreadingHTTPServer):
         for cache in (self.challenges, self.sessions):
             for key in [key for key, record in cache.items() if record[0] <= monotonic()]:
                 del cache[key]
+
+    def new_session(self):
+        session, token = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        self.sessions[session] = (monotonic() + SESSION_SECONDS, token)
+        cookie = (f"{self.cookie_name}={session}; Path=/api/; HttpOnly; "
+                  f"SameSite=Strict; Max-Age={SESSION_SECONDS}")
+        return {"csrf": token}, cookie
 
     def authenticate(self, path, data):
         root = self.ops.store.root
@@ -85,11 +95,7 @@ class ManagementServer(ThreadingHTTPServer):
                 pairing.verify(public, data["signature"], data["challenge"])
                 if issued[0] <= monotonic():
                     raise pairing.Rejected()
-                session, token = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                self.sessions[session] = (monotonic() + SESSION_SECONDS, token)
-                cookie = (f"{self.cookie_name}={session}; Path=/api/; HttpOnly; "
-                          f"SameSite=Strict; Max-Age={SESSION_SECONDS}")
-                return {"csrf": token}, cookie
+                return self.new_session()
         raise pairing.Rejected()
 
     def handle_error(self, request, client_address):
@@ -150,7 +156,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ASSETS:
             return self.send_error(404)
         name, media_type = ASSETS[self.path]
-        self.reply(200, (WEB / name).read_bytes(), media_type)
+        body = (WEB / name).read_bytes()
+        if self.path == "/" and self.server.local_session:
+            body = body.replace(b"<body>", b'<body data-local-session="true">').replace(
+                b'id="login" class=', b'id="login" hidden class=')
+        self.reply(200, body, media_type)
 
     def read_object(self):
         lengths = self.headers.get_all("Content-Length", [])
@@ -180,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         server = self.server
         if not self.host_ok() or self.headers.get_all("Origin", []) != [server.origin]:
             return self.send_error(403)
-        if self.path not in ("/api/pair", "/api/challenge", "/api/login", "/api/action"):
+        if self.path not in (*server.auth_paths, "/api/action"):
             return self.send_error(404)
         if self.path == "/api/action" and not self.authenticated():
             return self.send_error(403)
@@ -210,7 +220,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(409, {"error": str(error)})
         except Exception:
             return self.reply(500, {"error": "Operation failed. Check service status."})
-        view["bridge"] = self.server.ops.native.access.status() if view["docker_supported"] else None
+        if "bridge" not in view:
+            view["bridge"] = self.server.ops.native.access.status() if view["docker_supported"] else None
         self.reply(200, view)
 
 

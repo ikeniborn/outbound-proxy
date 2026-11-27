@@ -1,6 +1,7 @@
 "use strict";
 
 const el = (id) => document.getElementById(id);
+const localSession = document.body.dataset.localSession === "true";
 let csrf = "";
 let editing = null;
 let busy = false;
@@ -24,7 +25,8 @@ async function request(path, data) {
     const wasSignedIn = Boolean(csrf);
     csrf = "";
     el("panel").hidden = true;
-    el("login").hidden = false;
+    el("login").hidden = localSession;
+    if (localSession) throw new Error("Local session expired. Reload this page to reopen the panel.");
     el("secret").focus();
     throw new Error(wasSignedIn
       ? "Session expired. Reload this page to sign in with your paired browser."
@@ -103,11 +105,17 @@ function draw(state) {
   el("pending").hidden = !state.recovery_pending;
   el("enable").disabled = !state.selected || (state.running && state.enabled && state.boot_enabled);
   el("disable").disabled = state.running === false && !state.enabled && state.boot_enabled === false;
+  el("port-form").hidden = Boolean(state.deployment);
+  el("host-listeners").hidden = !state.deployment;
+  if (state.deployment) el("endpoints").textContent = state.deployment.endpoints.join(" · ");
   el("port").value = state.port;
   el("failover").checked = state.failover;
   el("docker").checked = state.docker;
   el("docker").disabled = !state.docker_supported;
   el("docker-unavailable").hidden = state.docker_supported;
+  if (state.deployment) {
+    el("docker-unavailable").textContent = "Enable Docker clients in the deployment to use this listener.";
+  }
   drawBridge(state.bridge);
   el("empty").hidden = state.upstreams.length !== 0;
   el("catalog").hidden = state.upstreams.length === 0;
@@ -268,6 +276,11 @@ el("editor-form").addEventListener("submit", event => {
 async function reopen() {
   el("login-form").inert = true;
   try {
+    if (localSession) {
+      csrf = (await request("/api/session", {})).csrf;
+      await refresh();
+      return;
+    }
     const keys = await storedKey();
     if (keys) await signIn(keys);
   } catch (error) {
