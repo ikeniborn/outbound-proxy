@@ -1,0 +1,36 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "urn:uuid:f24e8b2b-643e-4bdf-afbf-f3e6b6f4fb46",
+  "author": "OpenAI Codex (release review)",
+  "timestamp": "2026-11-27T17:57:54Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2023-45853",
+        "@id": "https://www.cve.org/CVERecord?id=CVE-2023-45853"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/outbound-proxy@sha256:987aab84e76395c9c7456529a68b21885331bcc0d0afcf2a08aaf45f417c79fc?arch=amd64&repository_url=ghcr.io%2Fikeniborn%2Foutbound-proxy",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=amd64&distro=debian-12.15&epoch=1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/outbound-proxy@sha256:987aab84e76395c9c7456529a68b21885331bcc0d0afcf2a08aaf45f417c79fc?arch=arm64&repository_url=ghcr.io%2Fikeniborn%2Foutbound-proxy",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=arm64&distro=debian-12.15&epoch=1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Debian Bookworm does not build contrib/minizip from the zlib source package. Both release inventories confirm the absence of a separate MiniZip binary package. See https://security-tracker.debian.org/tracker/CVE-2023-45853."
+    }
+  ]
+}
